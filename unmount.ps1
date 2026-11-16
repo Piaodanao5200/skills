@@ -25,6 +25,7 @@ $TARGETS = [ordered]@{
   'Agents'    = Join-Path $env:USERPROFILE '.agents\skills'
   'Codex'     = Join-Path $env:USERPROFILE '.codex\skills'
   'CodeBuddy' = Join-Path $env:USERPROFILE '.codebuddy\skills'
+  'Doubao'    = Join-Path $env:LOCALAPPDATA 'Doubao\User Data\Default\.doubao\agent_mode\workspace\.user_skills'
   'Claude'    = Join-Path $env:USERPROFILE '.claude\skills'
   'Cursor'    = Join-Path $env:USERPROFILE '.cursor\skills'
 }
