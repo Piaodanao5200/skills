@@ -1,0 +1,15 @@
+# 依赖与缓存，克隆后按需安装，不入仓
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 系统杂物
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 脚本运行日志
+*.log
+_*.log

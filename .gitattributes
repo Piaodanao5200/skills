@@ -1,0 +1,7 @@
+# 脚本与文本的行尾固定，避免跨机器克隆后出错
+*.sh    text eol=lf
+*.mjs   text eol=lf
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.md    text eol=lf
