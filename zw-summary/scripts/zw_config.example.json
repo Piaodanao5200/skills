@@ -1,0 +1,23 @@
+{
+  "bilibili": {
+    "cookie": {
+      "SESSDATA": "",
+      "bili_jct": "",
+      "buvid3": ""
+    }
+  },
+  "ai": {
+    "api_key": "",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-v4-flash"
+  },
+  "whisper": {
+    "model": "base",
+    "parallel_workers": 0
+  },
+  "error_correction": "dual",
+  "proxy": "",
+  "output": {
+    "dir": ""
+  }
+}

@@ -16,6 +16,15 @@ D:\collaborative project\skills\          ← 实体（唯一一份，进 git）
 C:\Users\12647\.workbuddy\skills\my-skill-a   →  D:\collaborative project\skills\my-skill-a
 ```
 
+## 已收录
+
+| skill | 用途 | 运行前提 | 备注 |
+|---|---|---|---|
+| `find-skills` | 搜技能市场 | 无 | — |
+| `zw-summary` | 视频/播客 → 结构化中文总结（B站/YouTube/X/抖音/小宇宙） | `ego-browser` CLI + Python(yt-dlp) + ffmpeg | 取数链路改造成本机版，见 `zw-summary/adapters/README.md`；**X 的搜索页不可用，只能喂单条链接** |
+
+新增 skill 后在这一行表里补一行——别人挂进来第一件事就是看这张表。
+
 ## 加一个 skill（4 步）
 
 1. 把 skill 目录复制进来，形如 `skills\<目录名>\SKILL.md`
