@@ -5,6 +5,7 @@
 | skill | 来源仓库 | 路径 | 提交 SHA | 装入日期 | 审阅 |
 |---|---|---|---|---|---|
 | `find-skills` | `vercel-labs/skills` | `skills/find-skills/SKILL.md` | `a41bdd0` | 2026-11-16 | 纯指令，无脚本 |
+| `s7-1200-plc-guide` | cangjie 蒸馏《S7-1200 系统手册》 | 无原始仓库，工作区已删 | 无 | 2026-11-16（另一会话蒸馏），2026-11-17 迁入本仓 | 19 文件 208KB，含 darwin 评测套件 |
 
 ## 审阅记录
 
