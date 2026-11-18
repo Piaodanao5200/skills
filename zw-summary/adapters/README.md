@@ -51,6 +51,8 @@ python ego_fetch.py <链接> --only audio                              # 只取�
 # X 没有可用搜索，按账号巡（主页 = 最近 6 条；--full = 20 条）
 python ego_fetch.py "https://x.com/AnthropicAI" --quiet        # → posts=6
 python ego_fetch.py "https://x.com/AnthropicAI" --full         # 正文放宽到 600 字 + 20 条
+python ego_fetch.py "https://x.com/AnthropicAI/media" --quiet  # 媒体页：顺带收图并落盘，tab=media
+python ego_fetch.py "https://x.com/AnthropicAI/with_replies"   # 回复页，tab=with_replies
 python ego_fetch.py "https://x.com/OpenAI/status/2122750124543926515" --full   # 单条 + 主贴下回复
 ```
 
@@ -107,7 +109,7 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 | 小红书 | ✅ | 视频笔记 ✅ | 图文 ✅ 5 图 | ✅ 读 `__INITIAL_STATE__.comments` | ✅ | 必须带 `xsec_token`，搜索拿到的 href 整条保留 |
 | B站 | ✅ 含播放/弹幕 | ✅ DASH 音轨 | ⚠️ 视频流需 Range，首条常 567 | ✅ 20 条带赞数 | ✅ | 评论走 `x/v2/reply`，浏览器内 fetch 不受 412 影响 |
 | YouTube | ⚠️ | ⚠️ | ⚠️ | ✖ 未实现 | ✅ 读 `ytInitialData` 递归找 `videoRenderer` | 字幕 CDN 429 未解；下载走 `yt_fetch.py` |
-| X | ✅ 含回复/转推/赞/浏览 | ✖ 未接（HLS） | ✅ 图片按原格式落盘 | ✅ 主贴下 20 条回复 | ✖ **账号侧搜索受限** | 搜索不可用 → 改喂用户主页（`x.com/<handle>`）批量取最近 6/20 条，落 `posts.json` |
+| X | ✅ 含回复/转推/赞/浏览 | ✖ 未接（HLS） | ✅ 图片按原格式落盘 | ✅ 主贴下 20 条回复 | ✖ **账号侧搜索受限** | 搜索不可用 → 按账号巡：`/handle`、`/media`、`/with_replies`，落 `posts.json`（`tab` 标明当前是哪个页） |
 
 
 ## 已知坑
@@ -134,6 +136,9 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 - **X 互动数会串位**：转推按钮的 `innerText` 可能同时含转推数与引用数（曾拼出 `70667065`），
   浏览数还带「查看 / View」后缀。统一正则只取第一个数字段。
 - **X 主页模式的 `arts[1..]` 是下一条推文，不是回复**：`--full` 读评论必须排除主页，否则把相邻推文当评论。
+- **X 图片落盘统一存成 `.jpg`**，但内容是原始格式（可能是 png）。读图前判文件头，别信扩展名。
+- **X 引用推有嵌套的两段 `tweetText`**：外层是引用者的评论，内层是被引原文。目前只取 `arts[0]` 的第一段，
+  被引内容不单独出字段——需要时用 `--full` 看正文里的拼接。
 - **B站合集/多P 视频的 `duration` 是总时长**：搜到「全748集」这类课程会显示 105912s（29 小时），
   不是单集时长。别拿它当视频长度判断，建议看 `--full` 里的实际首集信息。
 - 重装或升级 zw-summary 会覆盖整目录，本目录需另行备份。

@@ -95,7 +95,7 @@ try {
   out = await page.evaluate(async () => {
     const FULL = __FULL__;   // 页面上下文内的字面量，不能引用 Node 侧变量
     const r = { ok: false, audios: [], videos: [], images: [], title: "", author: "", desc: "",
-                when: "", duration: 0, stats: {}, subtitles: [], tags: [], comments: [], items: [], errors: [] };
+                when: "", tab: "", duration: 0, stats: {}, subtitles: [], tags: [], comments: [], items: [], errors: [] };
     // X 的纯文字推文没有媒体，ok 判定要允许「有正文即可」；其他平台仍要求有媒体
     let isX = false;
     const host = location.hostname;
@@ -271,12 +271,22 @@ try {
         isX = true;
         const arts = [...document.querySelectorAll('article[data-testid="tweet"]')];
 
-        // 用户主页模式（/OpenAI 这种没有 /status/ 的路径）：搜索不可用时这是唯一的批量入口
+        // 图片 URL：保留页面给的 format（原图可能是 png，写死 jpg 会 404），只把尺寸提到 orig
+        const imgUrl = (im) => {
+          const u = im.src || "";
+          if (!/[?&]format=/.test(u)) return u.split("?")[0] + "?format=jpg&name=900x900";
+          const base = u.replace(/[?&]name=[^&]+/, "").replace(/&$/, "");
+          return base + (base.includes("?") ? "&" : "?") + "name=orig";
+        };
+
+        // 主页 / 回复页 / 媒体页都按「按账号巡」处理；搜索不可用时这是唯一的批量入口
         const path = location.pathname.replace(/\/+$/, "");
-        const isProfile = /^\/[A-Za-z0-9_]{1,20}$/.test(path) && !/^\/(home|explore|search|i|settings|notifications|messages|compose)$/.test(path);
+        const pm = path.match(/^\/([A-Za-z0-9_]{1,20})(?:\/(with_replies|media|highlights))?$/);
+        const isProfile = !!pm && !/^\/(home|explore|search|i|settings|notifications|messages|compose)$/.test(path);
         if (isProfile && arts.length) {
           const take = FULL ? 20 : 6;
-          const handle = path.slice(1);
+          const handle = pm[1];
+          r.tab = pm[2] || "posts";
           r.author = "@" + handle;
           r.title = (document.querySelector('[data-testid="UserName"]')?.innerText || handle).split("\n")[0];
           r.desc = flatten(document.querySelector('[data-testid="UserDescription"]')?.innerText, 400);
@@ -289,6 +299,9 @@ try {
               const mm = (el.innerText || "").match(/[0-9][0-9.,]*[万亿KkMm]?/);
               return mm ? mm[0].replace(/,/g, "") : "";
             };
+            // 每条推文自带的图（媒体页主要靠这个），最多 4 张
+            const pics = [...a.querySelectorAll('img[src*="pbs.twimg.com/media"]')].slice(0, 4).map(imgUrl);
+            if (r.images.length < 12) pics.forEach(u => push(r.images, u));
             return {
               id: m ? m[1] : "",
               url: link ? "https://x.com" + link.split("?")[0] : "",
@@ -298,6 +311,7 @@ try {
               repost: num('[data-testid="retweet"]'),
               like: num('[data-testid="like"]'),
               view: num('[data-testid="analytics"]') || num('a[href$="/analytics"]'),
+              images: pics,
             };
           }).filter(x => x.id && x.text);
         }
@@ -327,13 +341,7 @@ try {
             like: pick('[data-testid="like"]'),
             view: pick('[data-testid="analytics"]') || pick('a[href$="/analytics"]'),
           };
-          // 图片：保留页面给出的 format（原图可能是 png，写死 jpg 会 404），只把尺寸提到 orig
-          for (const im of tw.querySelectorAll('img[src*="pbs.twimg.com/media"]')) {
-            let u = im.src || "";
-            if (!/[?&]format=/.test(u)) { push(r.images, u.split("?")[0] + "?format=jpg&name=900x900"); continue; }
-            u = u.replace(/[?&]name=[^&]+/, "").replace(/&$/, "");
-            push(r.images, u + (u.includes("?") ? "&" : "?") + "name=orig");
-          }
+          for (const im of tw.querySelectorAll('img[src*="pbs.twimg.com/media"]')) push(r.images, imgUrl(im));
           // 视频：<video> 常是 blob:，真实地址（含 m3u8）在网络请求里
           const v = tw.querySelector("video");
           if (v) { push(r.videos, v.currentSrc); push(r.videos, v.src); }
@@ -834,7 +842,7 @@ def main() -> int:
     result = {
         "ok": True, "platform": platform, "id": vid, "url": url,
         "title": data.get("title"), "author": data.get("author"), "desc": data.get("desc"),
-        "when": data.get("when") or "",
+        "when": data.get("when") or "", "tab": data.get("tab") or "",
         "duration": data.get("duration"), "stats": data.get("stats"),
         "tags": data.get("tags", []), "comments": data.get("comments", []),
         "images": data.get("images", [])[:12], "subtitles": data.get("subtitles", []),
