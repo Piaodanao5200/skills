@@ -95,7 +95,9 @@ try {
   out = await page.evaluate(async () => {
     const FULL = __FULL__;   // 页面上下文内的字面量，不能引用 Node 侧变量
     const r = { ok: false, audios: [], videos: [], images: [], title: "", author: "", desc: "",
-                duration: 0, stats: {}, subtitles: [], tags: [], comments: [], errors: [] };
+                when: "", duration: 0, stats: {}, subtitles: [], tags: [], comments: [], items: [], errors: [] };
+    // X 的纯文字推文没有媒体，ok 判定要允许「有正文即可」；其他平台仍要求有媒体
+    let isX = false;
     const host = location.hostname;
     const push = (arr, u) => { if (typeof u === "string" && /^https?:/.test(u)) arr.push(u); };
     const flatten = (s, n) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -264,17 +266,97 @@ try {
       }
 
       // ---------- X ----------
+      // 注意：纯文字推文没有任何媒体，ok 判定不能只看媒体数（见下方 isTextOnly）。
       if (host.includes("x.com") || host.includes("twitter.com")) {
-        const tw = document.querySelector('article[data-testid="tweet"]');
-        if (tw) {
-          r.title = (tw.querySelector('[data-testid="tweetText"]')?.innerText || "").slice(0, 200);
-          r.desc = tw.querySelector('[data-testid="tweetText"]')?.innerText || "";
-          r.author = (tw.querySelector('[data-testid="User-Name"]')?.innerText || "").split("\n")[0];
+        isX = true;
+        const arts = [...document.querySelectorAll('article[data-testid="tweet"]')];
+
+        // 用户主页模式（/OpenAI 这种没有 /status/ 的路径）：搜索不可用时这是唯一的批量入口
+        const path = location.pathname.replace(/\/+$/, "");
+        const isProfile = /^\/[A-Za-z0-9_]{1,20}$/.test(path) && !/^\/(home|explore|search|i|settings|notifications|messages|compose)$/.test(path);
+        if (isProfile && arts.length) {
+          const take = FULL ? 20 : 6;
+          const handle = path.slice(1);
+          r.author = "@" + handle;
+          r.title = (document.querySelector('[data-testid="UserName"]')?.innerText || handle).split("\n")[0];
+          r.desc = flatten(document.querySelector('[data-testid="UserDescription"]')?.innerText, 400);
+          r.items = arts.slice(0, take).map(a => {
+            const link = a.querySelector('a[href*="/status/"]')?.getAttribute("href") || "";
+            const m = link.match(/\/status\/(\d+)/);
+            const num = (sel) => {
+              const el = a.querySelector(sel);
+              if (!el) return "";
+              const mm = (el.innerText || "").match(/[0-9][0-9.,]*[万亿KkMm]?/);
+              return mm ? mm[0].replace(/,/g, "") : "";
+            };
+            return {
+              id: m ? m[1] : "",
+              url: link ? "https://x.com" + link.split("?")[0] : "",
+              text: flatten(a.querySelector('[data-testid="tweetText"]')?.innerText, FULL ? 600 : 200),
+              when: a.querySelector("time")?.getAttribute("datetime") || "",
+              reply: num('[data-testid="reply"]'),
+              repost: num('[data-testid="retweet"]'),
+              like: num('[data-testid="like"]'),
+              view: num('[data-testid="analytics"]') || num('a[href$="/analytics"]'),
+            };
+          }).filter(x => x.id && x.text);
         }
-        const v = tw?.querySelector("video");
-        if (v) { push(r.videos, v.currentSrc); push(r.videos, v.src); }
-        const srcs = [...(tw?.querySelectorAll("video source") || [])].map(s => s.src);
-        srcs.forEach(u => push(r.videos, u));
+
+        const tw = arts[0];
+        if (tw && !isProfile) {
+          const text = tw.querySelector('[data-testid="tweetText"]')?.innerText || "";
+          r.desc = text;
+          r.title = flatten(text, 120);
+          // User-Name 是「显示名 \n @handle \n · \n 时间」
+          const nameBlock = (tw.querySelector('[data-testid="User-Name"]')?.innerText || "")
+            .split("\n").map(s => s.trim()).filter(Boolean);
+          r.author = (nameBlock[0] || "") + (nameBlock[1] && nameBlock[1].startsWith("@") ? " " + nameBlock[1] : "");
+          r.when = tw.querySelector("time")?.getAttribute("datetime") || "";
+          const pick = (sel) => {
+            const el = tw.querySelector(sel);
+            if (!el) return "";
+            // retweet 按钮 innerText 可能同时含转推数与引用数（曾拼出 70667065），
+            // 浏览数还带「查看 / View」后缀，统一只取第一个数字段
+            const s = el.innerText || el.getAttribute("aria-label") || "";
+            const m = s.match(/[0-9][0-9.,]*[万亿KkMm]?/);
+            return m ? m[0].replace(/,/g, "").replace(/\.$/, "") : "";
+          };
+          r.stats = {
+            reply: pick('[data-testid="reply"]'),
+            repost: pick('[data-testid="retweet"]'),
+            like: pick('[data-testid="like"]'),
+            view: pick('[data-testid="analytics"]') || pick('a[href$="/analytics"]'),
+          };
+          // 图片：保留页面给出的 format（原图可能是 png，写死 jpg 会 404），只把尺寸提到 orig
+          for (const im of tw.querySelectorAll('img[src*="pbs.twimg.com/media"]')) {
+            let u = im.src || "";
+            if (!/[?&]format=/.test(u)) { push(r.images, u.split("?")[0] + "?format=jpg&name=900x900"); continue; }
+            u = u.replace(/[?&]name=[^&]+/, "").replace(/&$/, "");
+            push(r.images, u + (u.includes("?") ? "&" : "?") + "name=orig");
+          }
+          // 视频：<video> 常是 blob:，真实地址（含 m3u8）在网络请求里
+          const v = tw.querySelector("video");
+          if (v) { push(r.videos, v.currentSrc); push(r.videos, v.src); }
+          [...(tw.querySelectorAll("video source") || [])].forEach(s => push(r.videos, s.src));
+          if (!r.videos.length) {
+            const res = performance.getEntriesByType("resource").map(e => e.name);
+            res.filter(u => /video\.twimg\.com\/.*\.(mp4|m3u8)/.test(u)).slice(0, 4).forEach(u => push(r.videos, u));
+          }
+          if (!r.duration && v && v.duration && isFinite(v.duration)) r.duration = Math.round(v.duration);
+        }
+        // --full：主贴下面的回复（arts[1..]；主页模式下 arts 都是推文，不是回复）
+        if (FULL && !isProfile && arts.length > 1) {
+          r.comments = arts.slice(1, 21).map(a => {
+            const nb = (a.querySelector('[data-testid="User-Name"]')?.innerText || "")
+              .split("\n").map(s => s.trim()).filter(Boolean);
+            return {
+              author: nb[1] || nb[0] || "",
+              text: flatten(a.querySelector('[data-testid="tweetText"]')?.innerText, 400),
+              when: a.querySelector("time")?.getAttribute("datetime") || "",
+              like: (a.querySelector('[data-testid="like"]')?.innerText || "").trim(),
+            };
+          }).filter(c => c.text);
+        }
       }
     } catch (e) { r.errors.push(String(e)); }
 
@@ -289,7 +371,8 @@ try {
 
     const dedupe = (a) => [...new Set(a.filter(Boolean))];
     r.audios = dedupe(r.audios); r.videos = dedupe(r.videos);
-    r.ok = r.audios.length + r.videos.length + r.images.length > 0;
+    r.ok = r.audios.length + r.videos.length + r.images.length > 0
+        || (isX && (!!(r.desc || r.title) || r.items.length > 0));
     return r;
   });
 } catch (e) { out = { ok: false, error: String((e && e.stack) || e), audios: [], videos: [], images: [] }; }
@@ -428,7 +511,7 @@ try {
       // 失败原因要能区分「没登录」和「站点自己报错」，否则下次还会盲猜
       const body = (document.body.innerText || "").slice(0, 1200);
       if (/出错了|重新加载|Something went wrong/i.test(body)) {
-        r.error = "站点返回错误页（X 常见：搜索接口限流或风控，重试无效）→ 改用主页时间线，或直接喂单条链接";
+        r.error = "站点返回错误页（X 实测：多关键词、桌面/移动端、热门/最新全部报错，点重试无效，属账号侧搜索权限受限，非参数问题）→ 改用用户主页时间线，或直接喂单条链接";
       } else if (/扫码登录|登录后|Sign in|Log in/i.test(body)) {
         r.error = "页面要求登录（ego 里该平台登录态可能已失效）";
       } else {
@@ -519,6 +602,17 @@ def emit_full(result: dict) -> None:
         lines.append("话题: " + " ".join("#" + str(t) for t in tags))
     lines.append(f"链接: {result.get('url')}")
     lines.append(f"目录: {result.get('out_dir')}")
+
+    posts = result.get("posts") or []
+    if posts:
+        lines.append(f"--- 该账号最近 {len(posts)} 条 ---")
+        for p in posts:
+            stat = " ".join(f"{k[:4]}{v}" for k, v in
+                            (("reply", p.get("reply")), ("like", p.get("like")), ("view", p.get("view"))) if v)
+            lines.append(f"[{(p.get('when') or '')[:10]}] {flatten1(p.get('text'))[:150]}")
+            if stat:
+                lines.append(f"    {stat}  {p.get('url')}")
+        lines.append("")
 
     lines.append("--- 正文全文 ---")
     lines.append((result.get("desc") or "(无)").strip())
@@ -689,7 +783,7 @@ def main() -> int:
     q = args.quiet
     platform, vid = detect(args.target)
     url = build_url(platform, vid)
-    wait = 9000 if platform == "douyin" else 4500
+    wait = 9000 if platform == "douyin" else (7000 if platform == "x" else 4500)
     say(f"[1/4] 平台={platform} 等待={wait}ms 目标={url}", q)
 
     data = run_ego(url, wait, full=args.full)
@@ -703,7 +797,17 @@ def main() -> int:
                                              "error": str(err)[:300]}, ensure_ascii=False))
         return 1
 
-    out = Path(args.out) / f"{platform}_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
+    # X 的 vid 是整条 URL，直接清洗会得到又长又难读的目录名，改用 handle + 状态 ID
+    if platform == "x":
+        mx = re.search(r"(?:x|twitter)\.com/([^/]+)/status(?:es)?/(\d+)", str(vid))
+        if mx:
+            stem = f"x_{mx.group(1)}_{mx.group(2)[:14]}"
+        else:
+            mh = re.search(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)", str(vid))
+            stem = f"x_{mh.group(1)}" if mh else f"x_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
+    else:
+        stem = f"{platform}_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
+    out = Path(args.out) / stem
     out.mkdir(parents=True, exist_ok=True)
     say(f"[2/4] 音频候选 {len(data.get('audios', []))} / 视频候选 {len(data.get('videos', []))} / 图片 {len(data.get('images', []))}", q)
 
@@ -730,12 +834,18 @@ def main() -> int:
     result = {
         "ok": True, "platform": platform, "id": vid, "url": url,
         "title": data.get("title"), "author": data.get("author"), "desc": data.get("desc"),
+        "when": data.get("when") or "",
         "duration": data.get("duration"), "stats": data.get("stats"),
         "tags": data.get("tags", []), "comments": data.get("comments", []),
         "images": data.get("images", [])[:12], "subtitles": data.get("subtitles", []),
         "media_audio": media["audio"], "media_video": media["video"],
         "out_dir": str(out), "errors": data.get("errors", []),
     }
+    if data.get("items"):
+        result["posts"] = data["items"]
+        (out / "posts.json").write_text(
+            json.dumps({"author": data.get("author"), "bio": data.get("desc"),
+                        "posts": data["items"]}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 图文笔记：正文常在图里，图片必须落盘才能读
     img_dir = out / "img"
@@ -767,8 +877,9 @@ def main() -> int:
 
     if q:
         got = sum(1 for k in ("media_audio", "media_video") if result.get(k))
+        extra = f" posts={len(result['posts'])}" if result.get("posts") else ""
         print(f"SUMMARY: ok=1 fail=0 platform={platform} dur={result.get('duration') or '-'}s "
-              f"media={got} tags={len(result['tags'])} comments={len(result['comments'])} out={out}", flush=True)
+              f"media={got} tags={len(result['tags'])} comments={len(result['comments'])}{extra} out={out}", flush=True)
     elif args.full:
         emit_full(result)
     else:

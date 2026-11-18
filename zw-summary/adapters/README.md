@@ -47,6 +47,11 @@ python ego_fetch.py <链接> --full
 python ego_fetch.py "https://www.douyin.com/video/<19位ID>" --frames   # 下载+抽帧，默认 @@RESULT@@ JSON
 python ego_fetch.py BV1SAWC6YEFg --frames                            # 只有 ID 也行
 python ego_fetch.py <链接> --only audio                              # 只取音轨（最小体积，仅转写）
+
+# X 没有可用搜索，按账号巡（主页 = 最近 6 条；--full = 20 条）
+python ego_fetch.py "https://x.com/AnthropicAI" --quiet        # → posts=6
+python ego_fetch.py "https://x.com/AnthropicAI" --full         # 正文放宽到 600 字 + 20 条
+python ego_fetch.py "https://x.com/OpenAI/status/2122750124543926515" --full   # 单条 + 主贴下回复
 ```
 
 ### 关键词批量（`--search`：不给链接，只给关键词）
@@ -94,7 +99,7 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 1. `AudioTranscribe(media_audio.m4a)` → 带时间戳的文稿
 2. `ViewImage(frames/sheet_001.jpg)` → 画面内容（口播人、UI 截图、字幕条）
 
-## 平台覆盖（2026-11-16 实测）
+## 平台覆盖（2026-11-18 复测）
 
 | 平台 | 元数据 | 音轨 | 画面 | 评论（`--full`） | 搜索（`--search`） | 备注 |
 |---|---|---|---|---|---|---|
@@ -102,7 +107,7 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 | 小红书 | ✅ | 视频笔记 ✅ | 图文 ✅ 5 图 | ✅ 读 `__INITIAL_STATE__.comments` | ✅ | 必须带 `xsec_token`，搜索拿到的 href 整条保留 |
 | B站 | ✅ 含播放/弹幕 | ✅ DASH 音轨 | ⚠️ 视频流需 Range，首条常 567 | ✅ 20 条带赞数 | ✅ | 评论走 `x/v2/reply`，浏览器内 fetch 不受 412 影响 |
 | YouTube | ⚠️ | ⚠️ | ⚠️ | ✖ 未实现 | ✅ 读 `ytInitialData` 递归找 `videoRenderer` | 字幕 CDN 429 未解；下载走 `yt_fetch.py` |
-| X | ✅ 文案 | ⚠️ | ⚠️ | ✖ 未实现 | ✖ **站点报错页** | 搜索页稳定返回「出错了」，点重试也无效（2026-11-16 实测），只能喂单条链接 |
+| X | ✅ 含回复/转推/赞/浏览 | ✖ 未接（HLS） | ✅ 图片按原格式落盘 | ✅ 主贴下 20 条回复 | ✖ **账号侧搜索受限** | 搜索不可用 → 改喂用户主页（`x.com/<handle>`）批量取最近 6/20 条，落 `posts.json` |
 
 
 ## 已知坑
@@ -119,8 +124,16 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 - **抖音搜索卡片没有 title 属性、没有 `data-e2e`**：整段 `innerText` 是「时长 / 播放量 / 标题+简介 / @作者 / 时间」
   的固定顺序，只能按位置解析（先吃掉 `\d{1,2}:\d{2}`，再吃纯数字播放量，下一行才是标题）。用 `img[alt]` 或
   `a.innerText` 当标题会全空，导致「搜索有 38 条候选却一条都不合格」。
-- **X 搜索页返回「出错了。请尝试重新加载。」**：`f=top` 和 `f=live` 都一样，点三次「重试」也不恢复，
-  是站点侧对搜索接口的限制，不是代码问题。错误信息里已写明，别反复重跑浪费时间。
+- **X 搜索页返回「出错了。请尝试重新加载。」**：`f=top` / `f=live` / 引号短语 / 桌面 / 移动端全部一样，
+  点三次「重试」也不恢复，且页面**一个 GraphQL 请求都没发出去**（`performance` 里 0 条 `/i/api/graphql/`），
+  说明是账号侧搜索权限受限，不是参数或网络问题。替代路径：用户主页时间线（批量）、探索页趋势（单条）。
+- **X 图片 URL 不能写死 `format=jpg`**：原图可能是 png，`?format=jpg&name=orig` 直接 404。
+  `?format=jpg&name=900x900` 可用（服务端会转），但最稳是保留页面给的 format、只把 `name` 提到 `orig`。
+- **X 的 `ok` 判定不能只看媒体数**：纯文字推文没有任何媒体，第一版因此把能读到的推文判成失败
+  （报「未取到媒体地址」）。现在 X 分支额外允许「有正文或 items 非空」即算成功。
+- **X 互动数会串位**：转推按钮的 `innerText` 可能同时含转推数与引用数（曾拼出 `70667065`），
+  浏览数还带「查看 / View」后缀。统一正则只取第一个数字段。
+- **X 主页模式的 `arts[1..]` 是下一条推文，不是回复**：`--full` 读评论必须排除主页，否则把相邻推文当评论。
 - **B站合集/多P 视频的 `duration` 是总时长**：搜到「全748集」这类课程会显示 105912s（29 小时），
   不是单集时长。别拿它当视频长度判断，建议看 `--full` 里的实际首集信息。
 - 重装或升级 zw-summary 会覆盖整目录，本目录需另行备份。
