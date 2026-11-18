@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -46,6 +48,65 @@ REFERER = {
 
 EGO = shutil.which("ego-browser") or r"C:\Users\12647\.local\share\ego\active_version_dir\ego-browser"
 FRAMES_PY = r"D:\WorkBuddy\video_understanding\extract_frames.py"
+
+# ---- X 取数护栏 ----------------------------------------------------------
+# X 的 ToS 明确禁止脚本化抓取，Automation Rules 写明「可能导致永久封禁」。
+# 读操作的现实风险主要来自频率与当日总量，因此只对 x 平台强制配额 + 条间隔，
+# 其他平台不受影响（那些平台没有同类条款）。
+QUOTA_FILE = Path.home() / ".videosum" / "quota.json"
+GUARDED = "x"          # 只对这一个平台计数与限速
+DEFAULT_CAP = 100      # 每日上限（条），0 = 不限
+DEFAULT_GAP = "20-60"  # 每条之间的随机间隔（秒）
+
+
+def _quota_read() -> dict:
+    try:
+        return json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def quota_used(platform: str) -> int:
+    day = time.strftime("%Y-%m-%d")
+    return int((_quota_read().get(day) or {}).get(platform, 0))
+
+
+def quota_add(platform: str, n: int = 1) -> None:
+    data = _quota_read()
+    day = data.setdefault(time.strftime("%Y-%m-%d"), {})
+    day[platform] = int(day.get(platform, 0)) + n
+    for old in sorted(data)[:-7]:          # 只留最近 7 天
+        data.pop(old, None)
+    QUOTA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    QUOTA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def quota_blocked(platform: str, cap: int) -> str:
+    """返回拒绝理由；空串表示可以继续。"""
+    if platform != GUARDED or cap <= 0:
+        return ""
+    used = quota_used(platform)
+    if used >= cap:
+        return (f"{platform} 今日已取 {used} 条，达到上限 {cap}（--daily-cap 可调，0 为不限）。"
+                f"计数文件 {QUOTA_FILE}")
+    return ""
+
+
+def gap_sleep(platform: str, spec: str) -> None:
+    """批量模式里每条之间随机等待，避免形成稳定的机器节奏。"""
+    if platform != GUARDED:
+        return
+    lo, _, hi = spec.partition("-")
+    try:
+        a, b = int(lo), int(hi or lo)
+    except ValueError:
+        return
+    if b <= 0:
+        return
+    wait = random.uniform(min(a, b), max(a, b))
+    print(f"    [{platform}] 等待 {wait:.0f}s 再取下一条", flush=True)
+    time.sleep(wait)
+
 
 
 def detect(raw: str) -> tuple[str, str]:
@@ -713,13 +774,17 @@ def extract_urls(text: str) -> list[str]:
         r"(?:https?://)?youtu\.be/[A-Za-z0-9_-]{11}",
         r"(?:https?://)?(?:www\.)?xiaohongshu\.com/(?:explore|discovery/item)/[0-9a-f]{24}[^\s\"'<>）)]*",
     ]
-    out = []
+    hits = []
     for p in pats:
-        for m in re.findall(p, text):
-            u = m.rstrip(".,;")
-            if not u.startswith("http"):
-                u = "https://" + u.lstrip("/")
-            out.append(u)
+        for m in re.finditer(p, text):
+            hits.append((m.start(), m.group(0)))
+    hits.sort(key=lambda x: x[0])           # 按原文出现顺序，别按平台分组
+    out = []
+    for _, u in hits:
+        u = u.rstrip(".,;")
+        if not u.startswith("http"):
+            u = "https://" + u.lstrip("/")
+        out.append(u)
     return list(dict.fromkeys(out))
 
 
@@ -738,19 +803,34 @@ def do_urls(args) -> int:
         return 2
     print(f"[1/3] 从 {src.name} 认出 {len(urls)} 条链接", flush=True)
 
-    dirs, okn = [], 0
+    dirs, okn, tried, stopped = [], 0, 0, ""
+    prev_plat = ""
     for i, u in enumerate(urls, 1):
+        plat_i, _ = detect(u)
+        # 上一条是受管平台才需要等，混排清单里 B站/抖音不会被拖慢
+        if prev_plat:
+            gap_sleep(prev_plat, args.gap)
+        blocked = quota_blocked(plat_i, args.daily_cap)
+        if blocked:
+            stopped = blocked
+            print(f"[!] 提前停止：{blocked}", flush=True)
+            print(f"    剩余 {len(urls) - i + 1} 条未取", flush=True)
+            break
         print(f"[2/3] ({i}/{len(urls)}) {u}", flush=True)
+        tried += 1
         cmd = [sys.executable, str(Path(__file__).resolve()), u, "--out", args.out, "--quiet"]
         if args.no_download:
             cmd.append("--no-download")
         if args.only != "both":
             cmd += ["--only", args.only]
+        # 必须无条件传：0 表示不限，若省略子进程会回落到默认 100 而被误拦
+        cmd += ["--daily-cap", str(args.daily_cap)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=300)
         except subprocess.TimeoutExpired:
             print("    [!] 超时 300s，跳过", flush=True)
+            prev_plat = plat_i
             continue
         line = next((l for l in (p.stdout or "").splitlines() if l.startswith("SUMMARY:")), "")
         print("    " + (line or (p.stderr or "").strip()[-200:] or "无输出"), flush=True)
@@ -759,10 +839,13 @@ def do_urls(args) -> int:
             m = re.search(r"out=(.+)$", line)
             if m:
                 dirs.append(Path(m.group(1).strip()))
+        prev_plat = plat_i
 
     print("[3/3] 索引", flush=True)
     print_table(digest_rows([d / "meta.json" for d in dirs]))
-    print(f"SUMMARY: urls={len(urls)} ok={okn} fail={len(urls) - okn}", flush=True)
+    skipped = len(urls) - tried
+    extra = (f" skipped={skipped}" if skipped else "") + (" stopped=daily-cap" if stopped else "")
+    print(f"SUMMARY: urls={len(urls)} ok={okn} fail={tried - okn}{extra}", flush=True)
     return 0 if okn else 1
 
 
@@ -775,6 +858,10 @@ def do_search(args) -> int:
         platform, keyword = head, tail.strip()
     if platform not in SEARCH_URL:
         print(f"[!] 不支持的平台 {platform!r}，可选: {', '.join(SEARCH_URL)}", flush=True)
+        return 2
+    if platform == "x":
+        print("[!] X 站内搜索在本机账号不可用（页面直接报错，非参数问题，重试无效）。", flush=True)
+        print("    按主题搜集改用：`site:x.com 关键词` 搜索 → 结果整段存 txt → --urls 那个文件", flush=True)
         return 2
     if not keyword:
         print('[!] --search 需要关键词，例如: --search "agent" --platform bilibili', flush=True)
@@ -795,14 +882,24 @@ def do_search(args) -> int:
         print(f'    {i}. {it.get("title", "")[:46]}{who}  {it.get("extra", "")}', flush=True)
 
     # 复用本脚本的单条链路（独立进程 = 每条一个干净浏览器会话，单条失败不影响其余）
-    dirs, okn = [], 0
+    dirs, okn, tried, stopped = [], 0, 0, ""
     for i, it in enumerate(items, 1):
+        if i > 1:
+            gap_sleep(platform, args.gap)
+        blocked = quota_blocked(platform, args.daily_cap)
+        if blocked:
+            stopped = blocked
+            print(f"[!] 提前停止：{blocked}", flush=True)
+            break
         print(f"[2/3] ({i}/{len(items)}) {it['id']}", flush=True)
+        tried += 1
         cmd = [sys.executable, str(Path(__file__).resolve()), it["url"], "--out", args.out, "--quiet"]
         if args.no_download:
             cmd.append("--no-download")
         if args.only != "both":
             cmd += ["--only", args.only]
+        # 必须无条件传：0 表示不限，若省略子进程会回落到默认 100 而被误拦
+        cmd += ["--daily-cap", str(args.daily_cap)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=300)
@@ -826,8 +923,10 @@ def do_search(args) -> int:
     (idx / "search.json").write_text(json.dumps(
         {"platform": platform, "keyword": keyword, "items": items, "fetched": [str(d) for d in dirs]},
         ensure_ascii=False, indent=2), encoding="utf-8")
+    skipped = len(items) - tried
+    extra = (f" skipped={skipped}" if skipped else "") + (" stopped=daily-cap" if stopped else "")
     print(f"SUMMARY: search={platform} kw={keyword} found={len(items)} ok={okn} "
-          f"fail={len(items) - okn} list={idx / 'search.json'}", flush=True)
+          f"fail={tried - okn}{extra} list={idx / 'search.json'}", flush=True)
     return 0 if okn else 1
 
 
@@ -851,6 +950,10 @@ def main() -> int:
     ap.add_argument("--platform", default="douyin", choices=list(SEARCH_URL),
                     help="--search 用哪个平台（默认 douyin）")
     ap.add_argument("--limit", type=int, default=5, help="--search 取前 N 条（默认 5）")
+    ap.add_argument("--daily-cap", type=int, default=DEFAULT_CAP, metavar="N",
+                    help=f"X 每日取数上限，超过即拒绝执行（默认 {DEFAULT_CAP}，0 为不限）")
+    ap.add_argument("--gap", default=DEFAULT_GAP, metavar="MIN-MAX",
+                    help=f"X 批量取数时每条之间的随机等待秒数（默认 {DEFAULT_GAP}，0 为不等）")
     args = ap.parse_args()
 
     if args.digest:
@@ -865,6 +968,11 @@ def main() -> int:
     q = args.quiet
     platform, vid = detect(args.target)
     url = build_url(platform, vid)
+    blocked = quota_blocked(platform, args.daily_cap)
+    if blocked:
+        print("[!] " + blocked, flush=True)
+        print(f"SUMMARY: ok=0 fail=1 platform={platform} err=daily-cap", flush=True)
+        return 3
     wait = 9000 if platform == "douyin" else (7000 if platform == "x" else 4500)
     say(f"[1/4] 平台={platform} 等待={wait}ms 目标={url}", q)
 
@@ -956,6 +1064,11 @@ def main() -> int:
         say("[3/4] 跳过抽帧", q)
 
     (out / "meta.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if platform == GUARDED:
+        quota_add(platform)
+        cap = args.daily_cap if args.daily_cap > 0 else "不限"
+        say(f"[护栏] {platform} 今日已取 {quota_used(platform)}/{cap} 条", q)
 
     if q:
         got = sum(1 for k in ("media_audio", "media_video") if result.get(k))

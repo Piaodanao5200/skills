@@ -110,6 +110,27 @@ python ego_fetch.py --urls links.txt --out ~/videosum/x-topic
 **代价要知情**：站外搜索的覆盖面取决于搜索引擎对 X 的收录，拿不到「全部讨论」，只能拿到被外部索引到的热门帖子。
 要做穷尽式主题抓取，X 这条路目前不通。
 
+### X 取数护栏（默认开启）
+
+X 的服务条款禁止脚本化抓取，Automation Rules 写明「非 API 形式的自动化**可能导致永久封禁**」。
+读操作的现实风险来自频率和当日总量，所以脚本内置两道闸，**只对 x 生效**，其他平台完全不受影响：
+
+```bash
+--daily-cap N      # 每日上限，默认 100；超了直接拒绝执行（退出码 3），0 = 不限
+--gap MIN-MAX      # 批量时每条之间随机等待，默认 20-60 秒；0 = 不等
+```
+
+```bash
+python ego_fetch.py --urls links.txt                    # 用默认护栏：100 条/天，条间 20-60s
+python ego_fetch.py --urls big.txt --daily-cap 200 --gap 30-90   # 放宽（自己承担风险）
+python ego_fetch.py --urls fast.txt --daily-cap 0 --gap 0        # 全关
+```
+
+计数落在 `~/.videosum/quota.json`，按日期分桶，只保留最近 7 天。手工调低这里就能立刻解封额度，
+删掉整个文件即重置。批量模式会在配额用尽前**主动停下**并打印 `stopped=daily-cap`，不会跑到一半报错。
+
+混排清单里只有 x 前后会等待，B站/抖音/YouTube 不会被拖慢。
+
 ### 两阶段流水线（省 token 的标准跑法）
 
 ```
