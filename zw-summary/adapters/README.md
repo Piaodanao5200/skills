@@ -21,6 +21,22 @@
 | 小红书 | 无 xsec_token 直接 404 | token 只在搜索页 state 的 `search.feeds[].xsecToken` 里，必须从站内搜索拿 |
 | YouTube | 字幕接口 IP 级 429 | 页面内数据正常，字幕 CDN 仍可能 429 |
 
+## bili_api.py — B站 API 直取（2026-11-18 新增，B站首选）
+
+B站**不开浏览器**：直接调 `api.bilibili.com` + wbi 签名，秒级返回，产物格式与 ego_fetch 对齐。
+上面表格里的「412 风控」已破解：裸 urllib 没有 cookie 才会 412；带上 buvid3 + UA + Referer 就通。
+
+```bash
+python bili_api.py --search "关键词" --limit 5 --quiet   # 搜索+逐条详情落盘
+python bili_api.py BV1RG33zPEof                          # 单条详情
+python bili_api.py --digest                              # 索引表
+```
+
+- 字段：标题/简介/作者/发布时间/时长/七项统计(view·danmaku·reply·favorite·coin·share·like)/标签/20条评论
+- wbi 密钥每日更替，自动缓存于 `videosum/.bili_api_cache.json`（buvid3 长期缓存）
+- 依据 SocialSisterYi/bilibili-API-collect；评论走 `/x/v2/reply/main`（旧 `/x/v2/reply` 已返回空）
+- 未登录可查公开数据；单条评论仅 3 条热评时是 guest 限额，登录 cookie 可解锁完整楼层
+
 ## 用法
 
 三档输出，按「花多少 token」选（另有 `--search` 从关键词直接起跑，见下）：
