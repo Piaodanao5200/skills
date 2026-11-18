@@ -86,6 +86,7 @@ def parse(args) -> None:
         if it["id"] and it["id"] not in seen:
             seen.add(it["id"])
             res.append(it)
+    args.limit = min(args.limit, 50)  # X 取数硬上限：防风控触发，宁缺勿多
     res = res[: args.limit]
 
     if args.search:
@@ -113,7 +114,7 @@ def main() -> None:
     ap.add_argument("--search", help="搜索关键词（--gen/--parse 都要传）")
     ap.add_argument("--user", help="用户 handle")
     ap.add_argument("--tweet", help="推文 ID")
-    ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--limit", type=int, default=10, help="最多取几条；上限 50（防风控，用户 2026-11-19 定）")
     ap.add_argument("--mode", default="live", choices=["live", "top"])
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
