@@ -269,6 +269,10 @@ try {
       // 注意：纯文字推文没有任何媒体，ok 判定不能只看媒体数（见下方 isTextOnly）。
       if (host.includes("x.com") || host.includes("twitter.com")) {
         isX = true;
+        // 上面那个全局 video 循环会扫到右栏推荐位的视频，对 X 一律作废重来，
+        // 否则纯文字推文会莫名其妙显示 dur=37s、并带上别人的视频地址
+        r.duration = 0;
+        r.videos = [];
         const arts = [...document.querySelectorAll('article[data-testid="tweet"]')];
 
         // 图片 URL：保留页面给的 format（原图可能是 png，写死 jpg 会 404），只把尺寸提到 orig
@@ -696,6 +700,72 @@ def emit_digest(root: Path) -> int:
     return 0
 
 
+def extract_urls(text: str) -> list[str]:
+    """从任意文本里抠出可取的链接（允许直接粘贴搜索结果页，不用手工整理）。
+
+    协议可省略：搜索结果里常写成 `x.com/dhh/status/123` 这种裸域名。
+    """
+    pats = [
+        r"(?:https?://)?(?:www\.|mobile\.)?(?:x|twitter)\.com/[A-Za-z0-9_]+/status/\d+",
+        r"(?:https?://)?(?:www\.)?douyin\.com/video/\d{15,21}",
+        r"(?:https?://)?(?:www\.)?bilibili\.com/video/BV[0-9A-Za-z]{10}",
+        r"(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[A-Za-z0-9_-]{11}",
+        r"(?:https?://)?youtu\.be/[A-Za-z0-9_-]{11}",
+        r"(?:https?://)?(?:www\.)?xiaohongshu\.com/(?:explore|discovery/item)/[0-9a-f]{24}[^\s\"'<>）)]*",
+    ]
+    out = []
+    for p in pats:
+        for m in re.findall(p, text):
+            u = m.rstrip(".,;")
+            if not u.startswith("http"):
+                u = "https://" + u.lstrip("/")
+            out.append(u)
+    return list(dict.fromkeys(out))
+
+
+def do_urls(args) -> int:
+    """链接清单 → 逐条取数 → 索引表。
+
+    X 站内搜索被账号限制时，用「搜索引擎 site:x.com → 把结果整段存成 txt → 跑这个」补位。
+    """
+    src = Path(args.urls)
+    if not src.exists():
+        print(f"[!] 找不到文件 {src}", flush=True)
+        return 2
+    urls = extract_urls(src.read_text(encoding="utf-8", errors="replace"))
+    if not urls:
+        print("[!] 文件里没认出可取的链接（支持 x/抖音/B站/YouTube/小红书）", flush=True)
+        return 2
+    print(f"[1/3] 从 {src.name} 认出 {len(urls)} 条链接", flush=True)
+
+    dirs, okn = [], 0
+    for i, u in enumerate(urls, 1):
+        print(f"[2/3] ({i}/{len(urls)}) {u}", flush=True)
+        cmd = [sys.executable, str(Path(__file__).resolve()), u, "--out", args.out, "--quiet"]
+        if args.no_download:
+            cmd.append("--no-download")
+        if args.only != "both":
+            cmd += ["--only", args.only]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=300)
+        except subprocess.TimeoutExpired:
+            print("    [!] 超时 300s，跳过", flush=True)
+            continue
+        line = next((l for l in (p.stdout or "").splitlines() if l.startswith("SUMMARY:")), "")
+        print("    " + (line or (p.stderr or "").strip()[-200:] or "无输出"), flush=True)
+        if "ok=1" in line:
+            okn += 1
+            m = re.search(r"out=(.+)$", line)
+            if m:
+                dirs.append(Path(m.group(1).strip()))
+
+    print("[3/3] 索引", flush=True)
+    print_table(digest_rows([d / "meta.json" for d in dirs]))
+    print(f"SUMMARY: urls={len(urls)} ok={okn} fail={len(urls) - okn}", flush=True)
+    return 0 if okn else 1
+
+
 def do_search(args) -> int:
     """关键词 → 站内搜索 → 逐条取数 → 索引表。搜到的 url 也写进 search.json。"""
     target = (args.target or "").strip()
@@ -776,6 +846,8 @@ def main() -> int:
                     help="索引模式：扫 --out 下的 meta.json 输出紧凑表，不启动浏览器")
     ap.add_argument("--search", action="store_true",
                     help="关键词模式：站内搜索取前 N 条并逐条落盘，直接产出索引")
+    ap.add_argument("--urls", metavar="FILE",
+                    help="链接清单模式：文件里可以整段粘贴搜索结果，自动认出 x/抖音/B站/YouTube/小红书 链接后逐条取数")
     ap.add_argument("--platform", default="douyin", choices=list(SEARCH_URL),
                     help="--search 用哪个平台（默认 douyin）")
     ap.add_argument("--limit", type=int, default=5, help="--search 取前 N 条（默认 5）")
@@ -783,6 +855,8 @@ def main() -> int:
 
     if args.digest:
         return emit_digest(Path(args.out))
+    if args.urls:
+        return do_urls(args)
     if args.search:
         return do_search(args)
     if not args.target:
