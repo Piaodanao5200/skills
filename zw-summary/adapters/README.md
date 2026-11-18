@@ -215,10 +215,9 @@ python x_api.py --parse D:/WorkBuddy/ego/x-capture-out.json --search "关键词"
 # 用户时间线同理：--user handle → 解析 --user handle
 ```
 
-**状态（2026-11-18 实测）**：
+**状态（2026-11-19 复测）**：
 - ✅ 用户时间线：全通（UserByScreenName + UserOriginalsTimeline，8 条推文含 like/rt/reply/view 全字段）
-- ❌ 搜索：X 服务端对 SearchTimeline 返回 404——**连页面自己的请求都 404**（主页/时间线全 200），
-  属环境/IP 级限制，换网络环境后再试；twikit 库直连同样被拦
+- ✅ 搜索：已恢复（2026-11-19 实测 8 条推文正常解析）。此前 404 为环境级临时限制，已解除
 - cookie 提取：`D:/WorkBuddy/ego/cookie-x.mjs`（CDP 拿 auth_token/ct0/twid，登出后重跑）
 - **坑**：addScriptToEvaluateOnNewDocument 注册会跨运行残留，钩子变量必须版本化（__xCap_v4），
   否则旧脚本先建变量、新钩子被 guard 跳过；XHR 设了 responseType='json' 时 responseText 抛异常，须用 response
