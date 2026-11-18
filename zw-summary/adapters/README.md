@@ -179,3 +179,25 @@ meta.json         标题/作者/正文/互动数/话题/评论/图片直链/字�
 - **B站合集/多P 视频的 `duration` 是总时长**：搜到「全748集」这类课程会显示 105912s（29 小时），
   不是单集时长。别拿它当视频长度判断，建议看 `--full` 里的实际首集信息。
 - 重装或升级 zw-summary 会覆盖整目录，本目录需另行备份。
+
+## x_api.py — X 取数（2026-11-18 新增，ego 捕获通道）
+
+**为什么不直连 HTTP**：X 有 TLS 指纹 + x-client-transaction-id 反爬，requests/httpx/twikit
+在 Python 层一律被拦（实测 500/404）。所以走 **ego 真 Chrome 页面内截获**：挂 fetch+XHR 钩子，
+截获平台发给搜索/时间线的原始 JSON——真实指纹，风控暴露面与真人浏览一致。
+
+```bash
+# 两步流水（python 不拉起浏览器，避免沙箱拦截）
+python x_api.py --gen --search "关键词" --mode live > D:/WorkBuddy/ego/x-capture-run.mjs
+ego-browser nodejs < D:/WorkBuddy/ego/x-capture-run.mjs > D:/WorkBuddy/ego/x-capture-out.json
+python x_api.py --parse D:/WorkBuddy/ego/x-capture-out.json --search "关键词" --limit 10
+# 用户时间线同理：--user handle → 解析 --user handle
+```
+
+**状态（2026-11-18 实测）**：
+- ✅ 用户时间线：全通（UserByScreenName + UserOriginalsTimeline，8 条推文含 like/rt/reply/view 全字段）
+- ❌ 搜索：X 服务端对 SearchTimeline 返回 404——**连页面自己的请求都 404**（主页/时间线全 200），
+  属环境/IP 级限制，换网络环境后再试；twikit 库直连同样被拦
+- cookie 提取：`D:/WorkBuddy/ego/cookie-x.mjs`（CDP 拿 auth_token/ct0/twid，登出后重跑）
+- **坑**：addScriptToEvaluateOnNewDocument 注册会跨运行残留，钩子变量必须版本化（__xCap_v4），
+  否则旧脚本先建变量、新钩子被 guard 跳过；XHR 设了 responseType='json' 时 responseText 抛异常，须用 response
