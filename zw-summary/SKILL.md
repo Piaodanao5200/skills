@@ -5,7 +5,7 @@ display_name_en: ZW Video Summary
 description: 把视频或播客链接整理成一份结构完整的中文总结笔记。当用户给出 B站、YouTube、X/Twitter、抖音的视频链接或视频 ID，或小宇宙播客单集链接与 episode ID，并要求总结、整理、提炼、做笔记时使用。每份笔记包含元数据表、视频简介原文、一句话总览、按时间轴的分段详解、核心观点提炼、金句摘录，以及与公开资料的事实对照。典型用法：总结这个视频（附链接）、把这条视频整理成笔记、BV1xxxx 讲了什么、这期播客帮我提炼要点。多P合集与数小时长音频同样支持。
 description_zh: 给一个视频或播客链接，自动产出结构化的中文总结笔记。支持 B站、YouTube、X、抖音、小宇宙，也接受 BV 号、视频 ID、播客 episode ID。每份笔记含元数据、简介原文、一句话总览、时间轴分段详解、核心观点、金句摘录与事实对照；多P合集与数小时长音频同样支持。
 description_en: Turn a video or podcast link into a structured Chinese summary note. Works with Bilibili, YouTube, X, Douyin and Xiaoyuzhou, and also accepts BV ids, video ids or podcast episode ids. Each note includes metadata, the original description, a one-paragraph overview, a timeline-based breakdown, key takeaways, quotes, and a fact-check against public sources. Multi-part collections and multi-hour audio are supported.
-version: 1.2.0
+version: 1.3.0
 author: 张伟
 icon: icons/logo.png
 allowed-tools: Bash, Read, Write, Edit, WebFetch, WebSearch
@@ -34,7 +34,7 @@ D:\collaborative project\skills\zw-summary\        ← 唯一实体（git 仓库
 | Codex | `~/.codex/skills/zw-summary` | `/skills` 看列表，`$zw-summary` 显式调用 |
 | CodeBuddy | `~/.codebuddy/skills/zw-summary` | 同上 |
 | 通用（agents 标准） | `~/.agents/skills/zw-summary` | 各客户端按 agentskills.io 标准扫描 |
-| 豆包 | 豆包 workspace 的 `.user_skills` | **未实测**：豆包客户端读不到本机记忆库，且是否有 bash/python 待验证 |
+| 豆包 | 豆包 workspace 的 `.user_skills` | **2026-11-24 实测可用**：Junction 指向实体，SKILL.md 可读，`bili_api.py` / `ego_fetch.py` 可直接用 python 跑通；豆包不自带注入，靠平台偏好把 agent 引到这里 |
 
 **不要在 agent 目录里改文件**——那是链接，改的是实体；也不要用 `npx skills add` 装这个技能，
 它会往每个 agent 目录塞实体副本，一份变四份、无法统一更新。
@@ -67,6 +67,23 @@ python adapters/ego_fetch.py --search "关键词" --platform douyin --limit 5   
 1. 原文里出现的 `WorkBuddy` 只是「整理者」角色的代称，**换成你自己即可**——纯人工模式下由当前 agent 读文字稿写总结。
 2. SKILL.md 里 `~/.workbuddy/skills/zw-summary/` 这种路径，在你那边请改用**实体路径**
    `D:\collaborative project\skills\zw-summary\`，或你自己 skills 目录下那条 Junction 的路径。
+
+## 批量情报场景（每天 20 条/平台，2026-11-24 新增）
+
+适用：不要单条总结，而是每天批量拉 20 条，快速判断「今天业内有什么新做法」。核心是**把「看」和「记」分开**：转写稿只落盘，主会话只收结论。
+
+四步：
+
+1. **检索层（便宜）**：`--search "关键词" --limit 20 --quiet`，产物落 `~/videosum`。只读 `--digest` 出来的一行一条索引（标题 / 时长 / 播放量 / 日期），**不要读原始 `search.json`**。20 条索引约 800–1300 token，直接读 JSON 会涨到 8000–15000。
+2. **粗筛**：按标题与时长剔掉同名无关内容（游戏「记忆库」、Trados 翻译记忆库、电子琴记忆库这类），剩下的进细看队列。宁可少几条，不许拿无关的凑数。
+3. **细看层（贵，必须隔离）**：按每批 5 条派子 agent或批处理跑转写。**转写稿、字幕、关键帧一律只留在 `~/videosum/<平台>_<ID>/`，不回传主会话**。子 agent 只回「结论段 + 关键数据 + 3–5 条要点」，每条 ≤300 字。
+4. **汇总**：主会话只拿各批结论拼摘要，20 条的整体上下文成本压在 1 万 token 量级。
+
+**为什么必须隔离**：单条 10 分钟视频转写约 2000 字 / 3000 token，20 条就是 5–6 万 token，是裁剪后检索的 40–70 倍；而且转写稿一旦进上下文，后面每一轮都会重背一遍。
+
+**进度与断点**：`search.json` 里维护 `done` / `pending` 两列。当天跑不完就写「剩余 N 条待续，明日续跑」，绝不把未读的当已读。
+
+**并行注意**：`ego_fetch.py` 不能多进程并行（会抢 page label，见 pitfall-20261118-9545），细看队列要串行或按平台错开时间；`bili_api.py` 走纯 API，可并行。
 
 ## 使用方法
 
