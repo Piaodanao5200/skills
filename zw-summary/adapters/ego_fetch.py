@@ -521,20 +521,31 @@ try {
         });
       }
     } else if (P === "xhs") {
-      // 必须保留整条 href 里的 xsec_token，否则详情页 404
+      // 必须保留整条 href 里的 xsec_token，否则详情页 307 到 /404，报 300031「当前笔记暂时无法浏览」。
+      // 同一篇笔记在卡片里有两个 a：封面链接是不带 token 的 /explore/<id>，标题链接才带
+      // /search_result/<id>?xsec_token=...。旧写法先进先得、封面那条排前面，于是 20 条全是裸 id，
+      // 正文 20/20 失败（2026-11-26 实测）。这里按 id 归并、优先留带 token 的那条。
+      const xhsById = new Map();
       for (const a of document.querySelectorAll('a[href*="/explore/"], a[href*="/search_result/"]')) {
         const href = a.getAttribute("href") || "";
         const m = href.match(/\/(?:explore|search_result)\/([0-9a-f]{24})/);
         if (!m) continue;
+        const hasToken = /xsec_token=[^&\s]+/.test(href);
+        const prev = xhsById.get(m[1]);
+        if (prev && prev.hasToken && !hasToken) continue;
+        if (prev && !prev.hasToken && !hasToken) continue;
         const card = a.closest("section.note-item, .note-item, li") || a;
-        items.push({
+        const title = flat(card.querySelector(".title, .note-title")?.innerText || a.innerText);
+        xhsById.set(m[1], {
           id: m[1],
           url: abs(href),
-          title: flat(card.querySelector(".title, .note-title")?.innerText || a.innerText),
-          author: cleanAuthor(card.querySelector(".author, .name")?.innerText || ""),
-          extra: flat(card.querySelector(".like-wrapper, .count")?.innerText || ""),
+          hasToken,
+          title: title || (prev ? prev.title : ""),
+          author: cleanAuthor(card.querySelector(".author, .name")?.innerText || "") || (prev ? prev.author : ""),
+          extra: flat(card.querySelector(".like-wrapper, .count")?.innerText || "") || (prev ? prev.extra : ""),
         });
       }
+      items.push(...[...xhsById.values()].map(({ hasToken, ...rest }) => rest));
     } else if (P === "youtube") {
       // ytInitialData 是嵌套 object，递归找 videoRenderer
       const walk = (o, acc) => {
@@ -995,6 +1006,11 @@ def main() -> int:
         else:
             mh = re.search(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)", str(vid))
             stem = f"x_{mh.group(1)}" if mh else f"x_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
+    elif platform == "xhs":
+        # 小红书 vid 是整条 URL，旧写法清洗后只剩 "httpswwwxiaohongshucomse"，
+        # 20 条会全部写进同一个目录、互相覆盖（2026-11-26 实测）。改用笔记 24 位 id。
+        mno = re.search(r"[0-9a-f]{24}", str(vid))
+        stem = f"xhs_{mno.group(0)}" if mno else f"xhs_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
     else:
         stem = f"{platform}_{re.sub(r'[^0-9A-Za-z]', '', str(vid))[:24]}"
     out = Path(args.out) / stem
